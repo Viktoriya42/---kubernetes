@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+  labels:
+    app: web-app
+spec:
+  replicas: 4  # Указываем 4 реплики, так как это оптимально для пиковых нагрузок
+  selector:
+    matchLabels:
+      app: web-app
+  template:
+    metadata:
+      labels:
+        app: web-app
+    spec:
+      containers:
+      - name: web-app-container
+        image: your-docker-image:latest  # Укажите ваш Docker-образ приложения
+        ports:
+        - containerPort: 80  # Порт приложения
+        resources:
+          requests:
+            memory: "128Mi"  # Минимальные требования по памяти
+            cpu: "0.1"       # Минимальные требования по CPU, для стабильной работы
+          limits:
+            memory: "128Mi"  # Лимиты по памяти не меняем, так как память стабильна
+            cpu: "1"         # Лимиты по CPU увеличены, чтобы справляться с пиковыми нагрузками
+        readinessProbe:  # Проба готовности, чтобы убедиться, что под готов принимать трафик
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 10  # Задержка перед проверкой готовности, так как приложение инициализируется 5-10 секунд
+          periodSeconds: 5
+        livenessProbe:  # Проба жизни для перезапуска пода в случае зависания
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 20
+      affinity:
+        podAntiAffinity:  # Антиаффинность для обеспечения отказоустойчивости
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - web-app
+            topologyKey: "kubernetes.io/hostname"  # Обеспечиваем развёртывание подов на разных нодах
+      topologySpreadConstraints:  # Условие для мультизональности
+      - maxSkew: 1
+        topologyKey: "topology.kubernetes.io/zone"
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: web-app
+  strategy:
+    type: RollingUpdate  # Обновление RollingUpdate для минимизации даунтайма
+    rollingUpdate:
+      maxUnavailable: 1  # Максимум 1 под может быть недоступен во время обновления
+      maxSurge: 1        # Максимум 1 под может быть запущен сверх реплик во время обновления
+  minReadySeconds: 10  # Минимальное время, которое под должен быть в состоянии Ready перед переключением трафика
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web-app-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web-app
+  minReplicas: 2  # Минимальное количество реплик в ночное время
+  maxReplicas: 4  # Максимальное количество реплик в пиковое время
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50  # Автоскейлинг при превышении 50% нагрузки на CPU
